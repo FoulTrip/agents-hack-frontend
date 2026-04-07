@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+.custom-scrollbar::-webkit-scrollbar { width: 5px; }
+
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #1E293B;
+  border-radius: 20px;
+}
+
+html { scroll-behavior: smooth; }
+
+.edit-input {
+  @apply h-9 px-3 rounded-lg border border-[#E8E8E4] dark:border-[#2A2A26] bg-[#F7F7F5] dark:bg-[#1A1A18] text-[#1A1A18] dark:text-[#F0EFE9] text-[12px] font-medium focus:ring-1 focus:ring-[#4F9CF9] focus:outline-none transition-all;
+}
+
+.edit-textarea {
+  @apply p-3 rounded-lg border border-[#E8E8E4] dark:border-[#2A2A26] bg-[#F7F7F5] dark:bg-[#1A1A18] text-[#1A1A18] dark:text-[#F0EFE9] text-[12px] font-medium focus:ring-1 focus:ring-[#4F9CF9] focus:outline-none transition-all resize-none;
+}
