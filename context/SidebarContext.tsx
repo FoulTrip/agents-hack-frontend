@@ -61,7 +61,8 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const resp = await fetch(`${apiUrl}/api/sessions`, {
-        headers: { "Authorization": `Bearer ${accessToken}` }
+        headers: { "Authorization": `Bearer ${accessToken}` },
+        cache: "no-store"
       });
       if (resp.ok) {
         const data = await resp.json();

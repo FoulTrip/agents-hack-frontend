@@ -78,10 +78,15 @@ export interface WebSocketMessage {
   history?: Array<{ id: string; role: string; content: string; createdAt: string | null }>;
   docs?: any[];
   repoUrl?: string;
+  repoFullName?: string;
+  repoRefreshAt?: string;
+  refreshAt?: string;
+  githubRepos?: Array<{ name?: string; url?: string; fullName?: string }>;
   agentActivities?: AgentActivity[];
   pipelineLogs?: Array<{
     type: string;
     message: string;
+    detail?: string;
     level: string;
     phaseId?: number;
     phaseLabel?: string;
@@ -89,6 +94,82 @@ export interface WebSocketMessage {
     agentRole?: string;
     createdAt?: string;
   }>;
+}
+
+function sanitizeRepoToken(value: string): string {
+  return (value || "")
+    .trim()
+    .replace(/^['"]+|['"]+$/g, "")
+    .replace(/\.git$/i, "")
+    .replace(/\/$/, "");
+}
+
+function toRepoUrl(raw?: string | null, fullName?: string | null): string | null {
+  const candidate = sanitizeRepoToken(raw || "");
+  if (candidate) {
+    if (candidate.startsWith("http://") || candidate.startsWith("https://")) {
+      const normalized = candidate
+        .replace("http://", "https://")
+        .replace("www.github.com/", "github.com/")
+        .replace("https://www.github.com/", "https://github.com/");
+      const match = normalized.match(/^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)$/i);
+      if (!match?.[1]) return null;
+      return `https://github.com/${match[1]}`;
+    }
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(candidate)) {
+      return null;
+    }
+    return `https://github.com/${candidate}`;
+  }
+  const full = sanitizeRepoToken(fullName || "");
+  if (!full || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(full)) return null;
+  return `https://github.com/${full}`;
+}
+
+function resolveRepoUrl(message: WebSocketMessage): string | null {
+  const direct = toRepoUrl(message.repoUrl, message.repoFullName);
+  if (direct) return direct;
+
+  const fromProject = toRepoUrl(message.project?.repoUrl, message.project?.repoFullName);
+  if (fromProject) return fromProject;
+
+  const fromResult = toRepoUrl(message.result?.repoUrl, message.result?.repoFullName);
+  if (fromResult) return fromResult;
+
+  if (Array.isArray(message.githubRepos) && message.githubRepos.length > 0) {
+    const latest = message.githubRepos[message.githubRepos.length - 1];
+    const fromRepos = toRepoUrl(latest?.url, latest?.fullName);
+    if (fromRepos) return fromRepos;
+  }
+
+  const textSources: string[] = [];
+  if (typeof message.message === "string") textSources.push(message.message);
+  if (Array.isArray(message.logs)) textSources.push(...message.logs.filter((x): x is string => typeof x === "string"));
+  if (Array.isArray(message.history)) textSources.push(...message.history.map((h) => h.content || ""));
+  if (Array.isArray(message.pipelineLogs)) {
+    for (const pl of message.pipelineLogs) {
+      if (typeof pl.message === "string") textSources.push(pl.message);
+      if (typeof pl.detail === "string") textSources.push(pl.detail);
+    }
+  }
+
+  const extractFromText = (text: string): string | null => {
+    const byUrl = text.match(/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?)/i);
+    if (byUrl?.[1]) return byUrl[1];
+
+    const byLabel = text.match(/(?:repo(?:sitorio)?|repository)\s*[:=]?\s*([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?)/i);
+    if (byLabel?.[1]) return byLabel[1];
+
+    return null;
+  };
+
+  for (const src of textSources) {
+    const candidateFullName = extractFromText(src);
+    const byText = toRepoUrl(undefined, candidateFullName);
+    if (byText) return byText;
+  }
+
+  return null;
 }
 
 // Colores de las fases (debe coincidir con el backend)
@@ -278,6 +359,7 @@ interface UseSoftwareFactoryReturn {
   
   docs: any[];
   repoUrl: string | null;
+  repoRefreshAt: number;
   
   // Acciones
   startPipeline: (prompt: string, projectName?: string) => Promise<void>;
@@ -315,6 +397,16 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
 
   const [docs, setDocs] = useState<any[]>([]);
   const [repoUrl, setRepoUrl] = useState<string | null>(null);
+  const [repoRefreshAt, setRepoRefreshAt] = useState<number>(0);
+
+  const touchRepoFromMessage = useCallback((message: WebSocketMessage) => {
+    const resolvedRepo = resolveRepoUrl(message);
+    if (!resolvedRepo) return;
+    setRepoUrl(resolvedRepo);
+    const refreshRaw = (message.repoRefreshAt || message.refreshAt || "").trim();
+    const parsed = refreshRaw ? Date.parse(refreshRaw) : NaN;
+    setRepoRefreshAt(Number.isFinite(parsed) ? parsed : Date.now());
+  }, []);
 
   // Manejar mensajes WebSocket
   const handleWebSocketMessage = useCallback((message: WebSocketMessage) => {
@@ -379,9 +471,7 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
         if (message.docs && Array.isArray(message.docs)) {
           setDocs(message.docs);
         }
-        if (message.repoUrl) {
-          setRepoUrl(message.repoUrl);
-        }
+        touchRepoFromMessage(message);
         break;
 
       case 'pipeline_start':
@@ -414,8 +504,11 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
         setLogs(prev => [...prev, ...(message.logs || [])]);
         if (message.docs && Array.isArray(message.docs) && message.docs.length > 0) setDocs(message.docs);
         else if (message.notionDoc) setDocs(prev => [...prev, message.notionDoc]);
-        if (message.repoUrl) setRepoUrl(message.repoUrl);
-        else if (message.project?.repoUrl) setRepoUrl(message.project.repoUrl);
+        touchRepoFromMessage(message);
+        break;
+
+      case 'repo_update':
+        touchRepoFromMessage(message);
         break;
 
       case 'agent_log':
@@ -432,7 +525,7 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
         setIsAwaitingApproval(false);
         setResult(message.result);
         if (message.result?.docs) setDocs(prev => [...prev, ...message.result.docs]);
-        if (message.result?.repoUrl) setRepoUrl(message.result.repoUrl);
+        touchRepoFromMessage(message);
         break;
 
       case 'pipeline_error':
@@ -441,7 +534,7 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
         setError(message.error || 'Error desconocido');
         break;
     }
-  }, []);
+  }, [touchRepoFromMessage]);
 
   const sessionStatusRef = useRef<string | null>(null);
 
@@ -557,6 +650,7 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
     logs,
     docs,
     repoUrl,
+    repoRefreshAt,
     result,
     error,
     sessionId,

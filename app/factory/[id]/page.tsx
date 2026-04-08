@@ -144,7 +144,7 @@ export default function FactoryStatusPage() {
 
 
   const {
-    isRunning, isAwaitingApproval, approvalMessage, currentPhase, logs, docs, repoUrl, result, error,
+    isRunning, isAwaitingApproval, approvalMessage, currentPhase, logs, docs, repoUrl, repoRefreshAt, result, error,
     connectToSession, isConnected, resume, startPipeline, approve, reject
   } = useSoftwareFactory({ token: accessToken });
 
@@ -176,8 +176,11 @@ export default function FactoryStatusPage() {
   }, [accessToken, id]);
 
   const [isIframed, setIsIframed] = useState(false);
+  const [stackblitzLoading, setStackblitzLoading] = useState(false);
+  const [stackblitzFrameKey, setStackblitzFrameKey] = useState(0);
 
   const logsRef = useRef<HTMLDivElement | null>(null);
+  const stackblitzLoadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 
 
@@ -221,7 +224,32 @@ export default function FactoryStatusPage() {
 
 
 
-  const activeRepoUrl = repoUrl || result?.repoUrl;
+  const normalizeRepoUrl = (value?: string | null) => {
+    const raw = (value || "").trim().replace(/^['"]+|['"]+$/g, "").replace(/\.git$/, "").replace(/\/$/, "");
+    if (!raw) return null;
+    if (raw.startsWith("http://") || raw.startsWith("https://")) {
+      const normalized = raw
+        .replace("http://", "https://")
+        .replace("www.github.com/", "github.com/")
+        .replace("https://www.github.com/", "https://github.com/");
+      const match = normalized.match(/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/i);
+      return match ? normalized : null;
+    }
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(raw)) return null;
+    return `https://github.com/${raw}`;
+  };
+
+  const activeRepoUrl =
+    normalizeRepoUrl(repoUrl) ||
+    normalizeRepoUrl(result?.repoUrl) ||
+    normalizeRepoUrl(result?.repoFullName);
+
+  const stackblitzRepoSlug = React.useMemo(() => {
+    if (!activeRepoUrl) return null;
+    const match = activeRepoUrl.match(/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/i);
+    if (!match?.[1]) return null;
+    return match[1].replace(/\.git$/, "").replace(/\/$/, "");
+  }, [activeRepoUrl]);
 
 
 
@@ -246,6 +274,18 @@ export default function FactoryStatusPage() {
     if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
 
   }, [logs]);
+
+  useEffect(() => {
+    if (!stackblitzRepoSlug) return;
+    setStackblitzLoading(true);
+    setStackblitzFrameKey((prev) => prev + 1);
+  }, [stackblitzRepoSlug, repoRefreshAt]);
+
+  useEffect(() => {
+    return () => {
+      if (stackblitzLoadTimeoutRef.current) clearTimeout(stackblitzLoadTimeoutRef.current);
+    };
+  }, []);
 
 
 
@@ -703,12 +743,12 @@ export default function FactoryStatusPage() {
 
             {/* ── Code Viewer Panel ── */}
             <div className="flex flex-col rounded-xl border border-[#E8E8E4] dark:border-[#252522] bg-white dark:bg-[#141413] overflow-hidden shrink-0 relative" style={{ height: 600 }}>
-              {activeRepoUrl && (
+              {stackblitzRepoSlug && (
                 <div className="absolute top-2 right-2 flex gap-2 z-10">
                   <button 
                     onClick={() => {
-                        const iframe = document.querySelector('iframe[title="CodeSandbox Classic"]') as HTMLIFrameElement;
-                        if (iframe) iframe.src = iframe.src;
+                        setStackblitzLoading(true);
+                        setStackblitzFrameKey((prev) => prev + 1);
                     }}
                     className="p-1.5 rounded-md bg-black/40 hover:bg-black/60 text-white/70 hover:text-white transition-all backdrop-blur-sm border border-white/10"
                     title="Recargar visor"
@@ -716,7 +756,7 @@ export default function FactoryStatusPage() {
                     <RefreshCw size={12} />
                   </button>
                   <a 
-                    href={activeRepoUrl.replace('github.com', 'stackblitz.com/github')}
+                    href={`https://stackblitz.com/github/${stackblitzRepoSlug}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="p-1.5 rounded-md bg-black/40 hover:bg-black/60 text-white/70 hover:text-white transition-all backdrop-blur-sm border border-white/10"
@@ -726,21 +766,29 @@ export default function FactoryStatusPage() {
                   </a>
                 </div>
               )}
-              {activeRepoUrl ? (
-                activeRepoUrl.includes("github.com") ? (
+              {stackblitzRepoSlug ? (
+                <>
+                {stackblitzLoading && (
+                  <div className="absolute inset-0 z-[5] flex flex-col items-center justify-center gap-2 bg-[#09090b]/85 backdrop-blur-sm">
+                    <RefreshCw size={16} className="animate-spin text-emerald-400" />
+                    <p className="text-[11px] text-white/70">Sincronizando repositorio en StackBlitz...</p>
+                  </div>
+                )}
                   <iframe
-                    src={`https://stackblitz.com/github/${activeRepoUrl.split('github.com/')[1].replace(/\.git$/, '').replace(/\/$/, '')}?embed=1&theme=dark&view=editor`}
+                    key={`${stackblitzRepoSlug}-${repoRefreshAt}-${stackblitzFrameKey}`}
+                    src={`https://stackblitz.com/github/${stackblitzRepoSlug}?embed=1&theme=dark&view=editor&repo_refresh=${repoRefreshAt || 0}`}
                     className="w-full h-full border-0 bg-[#09090b]"
                     title="StackBlitz Viewer"
-                    onLoad={() => console.log("StackBlitz loading for:", activeRepoUrl)}
+                    onLoad={() => {
+                      if (stackblitzLoadTimeoutRef.current) clearTimeout(stackblitzLoadTimeoutRef.current);
+                      stackblitzLoadTimeoutRef.current = setTimeout(() => {
+                        setStackblitzLoading(false);
+                      }, 300);
+                    }}
                     allow="accelerometer; camera; encrypted-media; geolocation; gyroscope; hid; microphone; midi; payment; usb; xr-spatial-tracking"
                     sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts allow-downloads"
                   />
-                ) : (
-                  <div className="flex-1 flex items-center justify-center p-4 bg-[#1a1a2e]">
-                    <p className="text-[11px] text-[#8B8B85]">Repositorio no soportado para el visor interactivo.</p>
-                  </div>
-                )
+                </>
               ) : (
                 <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-[#1a1a2e] text-center px-10">
                   <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-white/20">

@@ -3,6 +3,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
+import { useSidebar } from '@/context/SidebarContext';
 import {
   Rocket, FileText, Upload, X, Sparkles, Loader2,
   ChevronRight, Users, Code2, TestTube2, BookOpen,
@@ -60,6 +61,7 @@ interface ProjectBrief {
 export default function FactoryInputPage() {
   const router      = useRouter();
   const { data: session } = useSession();
+  const { sessions, setSessions, refreshSessions } = useSidebar();
   const accessToken = (session as any)?.accessToken;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -116,6 +118,16 @@ export default function FactoryInputPage() {
       });
       if (resp.ok) {
         const data = await resp.json();
+        const newSession = {
+          sessionId: data.session_id,
+          title: brief.title || 'Nueva sesión',
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+        };
+        if (!sessions.some((s) => s?.sessionId === data.session_id)) {
+          setSessions([newSession, ...sessions]);
+        }
+        await refreshSessions();
         router.push(`/factory/${data.session_id}`);
       } else {
         throw new Error('Error al lanzar el pipeline');
