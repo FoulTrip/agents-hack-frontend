@@ -39,12 +39,29 @@ export interface GenerateResponse {
   websocket_url: string;
 }
 
+export interface AgentActivity {
+  id: string;
+  agentName: string;
+  agentRole: string;
+  status: string;
+  model?: string;
+  taskDescription?: string;
+  thoughtProcess?: string;
+  durationMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  costEstimate?: number;
+  startTime?: string;
+  endTime?: string;
+}
+
 export interface WebSocketMessage {
   type: string;
   session_id?: string;
   phase_id?: number;
   phase_label?: string;
   phase_color?: string;
+  agent_label?: string;
   logs?: string[];
   done?: boolean;
   result?: any;
@@ -59,6 +76,9 @@ export interface WebSocketMessage {
   notionDoc?: any;
   notionDocType?: string;
   history?: Array<{ id: string; role: string; content: string; createdAt: string | null }>;
+  docs?: any[];
+  repoUrl?: string;
+  agentActivities?: AgentActivity[];
 }
 
 // Colores de las fases (debe coincidir con el backend)
@@ -171,7 +191,7 @@ class SoftwareFactoryClient {
   connectWebSocket(sessionId: string, onMessage: (msg: WebSocketMessage) => void, onClose?: () => void): void {
     this.disconnectWebSocket();
 
-    const wsUrl = this.baseUrl.replace('http', 'ws') + `/ws/${sessionId}`;
+    const wsUrl = this.baseUrl.replace('http', 'ws') + `/api/ws/${sessionId}`;
     console.log('Conectando WebSocket:', wsUrl);
     
     this.wsConnection = new WebSocket(wsUrl);
@@ -310,9 +330,40 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
           setIsAwaitingApproval(true);
         }
         
-        if (message.history && Array.isArray(message.history)) {
+        // Reconstruir logs desde agentActivities persistidas (el proceso neuronal de cada agente)
+        if (message.agentActivities && Array.isArray(message.agentActivities) && message.agentActivities.length > 0) {
+          const reconstructed: string[] = [];
+          for (const act of message.agentActivities) {
+            // Header de agente
+            reconstructed.push(`FASE — ${act.agentName}`);
+            if (act.taskDescription) {
+              reconstructed.push(`🧑 PROMPT: ${act.taskDescription}`);
+            }
+            // Si hay thoughtProcess, expandir cada línea como log individual
+            if (act.thoughtProcess) {
+              const lines = act.thoughtProcess.split('\n').filter((l: string) => l.trim());
+              reconstructed.push(...lines);
+            }
+            const statusEmoji = act.status === 'completed' ? '✅' : act.status === 'failed' ? '❌' : '⏳';
+                        const formatDur = (ms: number) => {
+              const sec = Math.floor(ms / 1000);
+              const m = Math.floor(sec / 60);
+              const s = sec % 60;
+              return m > 0 ? `${m}m ${s}s` : `${s}s`;
+            };
+            reconstructed.push(`${statusEmoji} ${act.agentName} — ${act.status}${act.durationMs ? ` (Tomó ${formatDur(act.durationMs)})` : ''}`);
+          }
+          setLogs(reconstructed);
+        } else if (message.history && Array.isArray(message.history)) {
+          // Fallback: logs de alto nivel del historial de mensajes
           const historyLogs = message.history.map((h: any) => `[${h.role === 'user' ? '🧑 PROMPT' : '🤖 AGENTE'}] ${h.content}`);
           setLogs(historyLogs);
+        }
+        if (message.docs && Array.isArray(message.docs)) {
+          setDocs(message.docs);
+        }
+        if (message.repoUrl) {
+          setRepoUrl(message.repoUrl);
         }
         break;
 
@@ -344,12 +395,20 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
       case 'phase_complete':
         setCompletedPhases(prev => (message.phase_id && !prev.includes(message.phase_id)) ? [...prev, message.phase_id] : prev);
         setLogs(prev => [...prev, ...(message.logs || [])]);
-        if (message.notionDoc) setDocs(prev => [...prev, message.notionDoc]);
-        if (message.project?.repoUrl) setRepoUrl(message.project.repoUrl);
+        if (message.docs && Array.isArray(message.docs) && message.docs.length > 0) setDocs(message.docs);
+        else if (message.notionDoc) setDocs(prev => [...prev, message.notionDoc]);
+        if (message.repoUrl) setRepoUrl(message.repoUrl);
+        else if (message.project?.repoUrl) setRepoUrl(message.project.repoUrl);
+        break;
+
+      case 'agent_log':
+        // Logs de streaming en tiempo real de los agentes
+        setLogs(prev => [...prev, ...(message.logs || [])]);
         break;
 
       case 'pipeline_complete':
         setIsRunning(false);
+        setIsAwaitingApproval(false);
         setResult(message.result);
         if (message.result?.docs) setDocs(prev => [...prev, ...message.result.docs]);
         if (message.result?.repoUrl) setRepoUrl(message.result.repoUrl);
@@ -357,6 +416,7 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
 
       case 'pipeline_error':
         setIsRunning(false);
+        setIsAwaitingApproval(false);
         setError(message.error || 'Error desconocido');
         break;
     }
