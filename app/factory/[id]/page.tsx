@@ -356,8 +356,7 @@ export default function FactoryStatusPage() {
 
             <h1 className="text-[22px] font-semibold tracking-tight text-[#1A1A18] dark:text-[#F0EFE9]">
 
-              Ejecución multi-agente
-
+              Ejecución de desarollo
             </h1>
 
             <div className="flex items-center gap-2 flex-wrap">
