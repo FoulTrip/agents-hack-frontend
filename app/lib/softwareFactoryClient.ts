@@ -79,6 +79,16 @@ export interface WebSocketMessage {
   docs?: any[];
   repoUrl?: string;
   agentActivities?: AgentActivity[];
+  pipelineLogs?: Array<{
+    type: string;
+    message: string;
+    level: string;
+    phaseId?: number;
+    phaseLabel?: string;
+    agentName?: string;
+    agentRole?: string;
+    createdAt?: string;
+  }>;
 }
 
 // Colores de las fases (debe coincidir con el backend)
@@ -277,6 +287,7 @@ interface UseSoftwareFactoryReturn {
   clearSession: () => void;
   resume: (sessionId: string) => Promise<void>;
   approve: () => Promise<void>;
+  reject: (feedback: string) => Promise<void>;
 }
 
 export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): UseSoftwareFactoryReturn {
@@ -330,32 +341,38 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
           setIsAwaitingApproval(true);
         }
         
-        // Reconstruir logs desde agentActivities persistidas (el proceso neuronal de cada agente)
-        if (message.agentActivities && Array.isArray(message.agentActivities) && message.agentActivities.length > 0) {
+        // 1. Prioridad: PipelineLogs persistidos (el sistema de base de datos)
+        if (message.pipelineLogs && Array.isArray(message.pipelineLogs) && message.pipelineLogs.length > 0) {
+          const formattedLogs = message.pipelineLogs.map(log => {
+            const msg = log.message || "";
+            if (log.type === 'phase_start') return `FASE — ${log.phaseLabel || log.agentName || 'Nueva Fase'}`;
+            if (log.type === 'agent_thought' || log.type === 'agent_log') return `🤖 ${msg}`;
+            if (log.type === 'agent_tool_call') return `🔧 ${msg}`;
+            if (log.type === 'agent_tool_result') return `✅ ${msg}`;
+            if (log.type === 'awaiting_approval') return `[⚠️] ${msg}`;
+            if (log.type === 'hitl_approved') return `[✅] ${msg}`;
+            if (log.type === 'pipeline_error') return `[❌] ${msg}`;
+            return msg;
+          }).filter(l => l.length > 0);
+          setLogs(formattedLogs);
+        }
+        // 2. Fallback: Reconstruir desde agentActivities
+        else if (message.agentActivities && Array.isArray(message.agentActivities) && message.agentActivities.length > 0) {
           const reconstructed: string[] = [];
           for (const act of message.agentActivities) {
-            // Header de agente
             reconstructed.push(`FASE — ${act.agentName}`);
-            if (act.taskDescription) {
-              reconstructed.push(`🧑 PROMPT: ${act.taskDescription}`);
-            }
-            // Si hay thoughtProcess, expandir cada línea como log individual
+            if (act.taskDescription) reconstructed.push(`🧑 PROMPT: ${act.taskDescription}`);
             if (act.thoughtProcess) {
               const lines = act.thoughtProcess.split('\n').filter((l: string) => l.trim());
               reconstructed.push(...lines);
             }
             const statusEmoji = act.status === 'completed' ? '✅' : act.status === 'failed' ? '❌' : '⏳';
-                        const formatDur = (ms: number) => {
-              const sec = Math.floor(ms / 1000);
-              const m = Math.floor(sec / 60);
-              const s = sec % 60;
-              return m > 0 ? `${m}m ${s}s` : `${s}s`;
-            };
-            reconstructed.push(`${statusEmoji} ${act.agentName} — ${act.status}${act.durationMs ? ` (Tomó ${formatDur(act.durationMs)})` : ''}`);
+            reconstructed.push(`${statusEmoji} ${act.agentName} — ${act.status}`);
           }
           setLogs(reconstructed);
-        } else if (message.history && Array.isArray(message.history)) {
-          // Fallback: logs de alto nivel del historial de mensajes
+        } 
+        // 3. Última opción: Historial de mensajes
+        else if (message.history && Array.isArray(message.history)) {
           const historyLogs = message.history.map((h: any) => `[${h.role === 'user' ? '🧑 PROMPT' : '🤖 AGENTE'}] ${h.content}`);
           setLogs(historyLogs);
         }
@@ -402,8 +419,12 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
         break;
 
       case 'agent_log':
-        // Logs de streaming en tiempo real de los agentes
-        setLogs(prev => [...prev, ...(message.logs || [])]);
+      case 'agent_tool_call':
+      case 'agent_tool_result':
+        // Logs de streaming en tiempo real de los agentes (pensamientos y herramientas)
+        if (message.logs && Array.isArray(message.logs)) {
+          setLogs(prev => [...prev, ...((message.logs || []) as string[])]);
+        }
         break;
 
       case 'pipeline_complete':
@@ -502,6 +523,23 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
     }
   }, [baseUrl, sessionId, token]);
 
+  const reject = useCallback(async (feedback: string) => {
+    if (!sessionId) return;
+    try {
+      const resp = await fetch(`${baseUrl}/api/reject/${sessionId}`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}) 
+        },
+        body: JSON.stringify({ message: feedback })
+      });
+      if (!resp.ok) throw new Error("Rejection failed");
+    } catch (e) {
+      console.error(e);
+    }
+  }, [baseUrl, sessionId, token]);
+
   useEffect(() => {
     return () => {
       client.disconnectWebSocket();
@@ -528,7 +566,8 @@ export function useSoftwareFactory(options: UseSoftwareFactoryOptions = {}): Use
     disconnect,
     clearSession,
     resume,
-    approve
+    approve,
+    reject
   };
 }
 

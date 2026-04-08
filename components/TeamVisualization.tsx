@@ -5,28 +5,41 @@ import { User, MessageSquare, Briefcase, ShieldCheck, Layers, Code2, ArrowRight 
 
 interface TeamVisualizationProps {
   activePhase: number | null;
+  agents?: any[];
 }
 
-export function TeamVisualization({ activePhase }: TeamVisualizationProps) {
+export function TeamVisualization({ activePhase, agents }: TeamVisualizationProps) {
+  // Helper to find configured agent name by role slug
+  const getAgentName = (roleSlug: string, defaultName: string) => {
+    if (!agents) return defaultName;
+    const agent = agents.find(a => 
+      a.role.toLowerCase() === roleSlug.toLowerCase() || 
+      (roleSlug === 'advisor' && a.role.toLowerCase().includes('advisor')) ||
+      (roleSlug === 'experts' && a.role.toLowerCase().includes('architect')) ||
+      (roleSlug === 'devs' && a.role.toLowerCase().includes('developer'))
+    );
+    return agent ? agent.name : defaultName;
+  };
+
   const roleGroups = [
     {
       title: "Estrategia",
       roles: [
-        { id: "advisor", label: "Advisor", icon: ShieldCheck, phaseId: 1 },
-        { id: "experts", label: "Architects", icon: Layers, phaseId: 2 },
+        { id: "advisor", label: getAgentName("advisor", "Advisor"), icon: ShieldCheck, phaseId: 1 },
+        { id: "experts", label: getAgentName("experts", "Architects"), icon: Layers, phaseId: 2 },
       ]
     },
     {
       title: "Ejecución",
       roles: [
         { id: "director", label: "Director", icon: Briefcase },
-        { id: "devs", label: "Developers", icon: Code2, phaseId: 3 },
+        { id: "devs", label: getAgentName("devs", "Developers"), icon: Code2, phaseId: 3 },
       ]
     },
     {
       title: "Entrega",
       roles: [
-        { id: "spoc", label: "SPoC", icon: MessageSquare, phaseId: 4 },
+        { id: "spoc", label: getAgentName("spoc", "SPoC"), icon: MessageSquare, phaseId: 4 },
         { id: "client", label: "Cliente", icon: User, phaseId: 4 },
       ]
     }

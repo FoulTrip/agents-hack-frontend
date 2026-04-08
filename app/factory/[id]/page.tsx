@@ -144,11 +144,8 @@ export default function FactoryStatusPage() {
 
 
   const {
-
     isRunning, isAwaitingApproval, approvalMessage, currentPhase, logs, docs, repoUrl, result, error,
-
-    connectToSession, isConnected, resume, startPipeline, approve
-
+    connectToSession, isConnected, resume, startPipeline, approve, reject
   } = useSoftwareFactory({ token: accessToken });
 
 
@@ -158,8 +155,25 @@ export default function FactoryStatusPage() {
   const [isProcessing, setIsProcessing] = useState(false);
 
   const [selectedArtifact, setSelectedArtifact] = useState<any>(null);
-
   const [approving, setApproving] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const [rejecting, setRejecting] = useState(false);
+
+  const [agents, setAgents] = useState<any[]>([]);
+
+  // Fetch configured agents for this session
+  useEffect(() => {
+    if (accessToken && id) {
+      fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/user/agents/session/${id}`, {
+        headers: { "Authorization": `Bearer ${accessToken}` }
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) setAgents(data);
+      })
+      .catch(err => console.error("Error fetching agents:", err));
+    }
+  }, [accessToken, id]);
 
   const [isIframed, setIsIframed] = useState(false);
 
@@ -203,7 +217,7 @@ export default function FactoryStatusPage() {
 
   const allDocs = [...(docs || []), ...(result?.notionDocs || result?.docs || [])]
 
-    .filter((v, i, a) => a.findIndex(t => t.url === v.url) === i);
+    .filter((v, i, a) => a.findIndex(t => (t.id && t.id === v.id) || (t.url && t.url === v.url)) === i);
 
 
 
@@ -257,7 +271,19 @@ export default function FactoryStatusPage() {
 
   };
 
-
+  const handleReject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!feedback.trim()) return;
+    setRejecting(true);
+    try { 
+      await reject(feedback); 
+      setFeedback(""); 
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setTimeout(() => setRejecting(false), 3000);
+    }
+  };
 
   const sessionShort = typeof id === "string" ? id.substring(0, 8) : "—";
 
@@ -447,7 +473,7 @@ export default function FactoryStatusPage() {
 
         <div className="shrink-0">
 
-          <TeamVisualization activePhase={computedPhase} />
+          <TeamVisualization activePhase={computedPhase} agents={agents} />
 
         </div>
 
@@ -457,56 +483,15 @@ export default function FactoryStatusPage() {
 
         <div className="flex flex-col gap-4 min-h-0 flex-1">
 
-          {isAwaitingApproval && (
-            <div className="flex flex-col rounded-xl border border-amber-500/30 bg-amber-500/5 dark:bg-amber-500/10 overflow-hidden shrink-0 animate-in fade-in zoom-in duration-300">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-amber-500/20 bg-amber-500/10">
-                <div className="flex items-center gap-2">
-                  <AlertCircle size={13} className="text-amber-600 dark:text-amber-500" />
-                  <span className="text-[11px] font-bold text-amber-600 dark:text-amber-500 uppercase tracking-widest">
-                    Aprobación Requerida
-                  </span>
-                </div>
-                {approving && <RefreshCw size={12} className="animate-spin text-amber-600" />}
-              </div>
-              
-              <div className="p-4 space-y-4">
-                <p className="text-[12px] text-[#5C5C56] dark:text-[#F0EFE9] leading-relaxed italic">
-                  "{approvalMessage || "Revisa los requerimientos y la arquitectura antes de proceder a la generación de código."}"
-                </p>
-                
-                <div className="space-y-2 lg:w-1/3">
-                  <button
-                    onClick={handleApprove}
-                    disabled={approving}
-                    className="w-full h-10 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white text-[12px] font-black tracking-wide transition-all shadow-md shadow-amber-500/20 flex items-center justify-center gap-2"
-                  >
-                    {approving 
-                      ? <><RefreshCw size={14} className="animate-spin" /> PROCESANDO...</> 
-                      : <><CheckCircle2 size={16} /> APROBAR PROYECTO</>}
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      const feedback = prompt("Introduce tus cambios o sugerencias:");
-                      if (feedback) {
-                        // Suponiendo que hay una función reject
-                        // reject(feedback);
-                      }
-                    }}
-                    className="w-full h-10 rounded-lg border border-amber-500/30 text-amber-600 dark:text-amber-500 hover:bg-amber-500/5 transition-colors text-[11px] font-bold"
-                  >
-                    SOLICITAR CAMBIOS
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+          {/* El panel de aprobación se movió a la derecha de los logs */}
 
           {/* ── Columna de Trabajo (Logs + Artefactos) ── */}
-          <div className="flex flex-col gap-4 min-h-0 overflow-y-auto" style={{ scrollbarWidth: 'none' }}>
+          <div className="flex flex-col gap-4 min-h-0 overflow-y-auto pb-10" style={{ scrollbarWidth: 'auto' }}>
             
-            {/* Logs panel */}
-            <div className="flex flex-col rounded-xl border border-[#E8E8E4] dark:border-[#252522] bg-white dark:bg-[#141413] overflow-hidden shrink-0" style={{ height: 450 }}>
+            {/* Fila de Logs y Aprobación */}
+            <div className="flex flex-col xl:flex-row gap-4 shrink-0">
+              {/* Logs panel */}
+              <div className="flex-1 flex flex-col rounded-xl border border-[#E8E8E4] dark:border-[#252522] bg-white dark:bg-[#141413] overflow-hidden min-w-0" style={{ height: 450 }}>
               {/* Panel header */}
               <div className="flex items-center justify-between px-4 py-3 border-b border-[#E8E8E4] dark:border-[#252522] shrink-0">
                 <div className="flex items-center gap-2">
@@ -603,6 +588,58 @@ export default function FactoryStatusPage() {
                   </form>
                 </div>
               )}
+              </div>
+
+              {/* Panel de Aprobación Lateral */}
+              {isAwaitingApproval && (
+                <div className="w-full xl:w-[380px] flex flex-col rounded-xl border border-amber-500/30 bg-amber-500/5 dark:bg-amber-500/10 overflow-hidden shrink-0 animate-in fade-in slide-in-from-right duration-300" style={{ height: 'fit-content' }}>
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-amber-500/20 bg-amber-500/10">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle size={13} className="text-amber-600 dark:text-amber-500" />
+                      <span className="text-[11px] font-bold text-amber-600 dark:text-amber-500 uppercase tracking-widest">
+                        Aprobación Requerida
+                      </span>
+                    </div>
+                    {approving && <RefreshCw size={12} className="animate-spin text-amber-600" />}
+                  </div>
+                  
+                  <div className="p-4 space-y-4">
+                    <p className="text-[12px] text-[#5C5C56] dark:text-[#F0EFE9] leading-relaxed italic">
+                      "{approvalMessage || "Revisa los requerimientos y la arquitectura antes de proceder a la generación de código."}"
+                    </p>
+                    
+                    <div className="space-y-2 mt-2">
+                      <button
+                        onClick={handleApprove}
+                        disabled={approving}
+                        className="w-full h-10 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white text-[12px] font-black tracking-wide transition-all shadow-md shadow-amber-500/20 flex items-center justify-center gap-2"
+                      >
+                        {approving 
+                          ? <><RefreshCw size={14} className="animate-spin" /> PROCESANDO...</> 
+                          : <><CheckCircle2 size={16} /> APROBAR PROYECTO</>}
+                      </button>
+
+                      <form onSubmit={handleReject} className="relative mt-2">
+                        <textarea
+                          value={feedback}
+                          onChange={(e) => setFeedback(e.target.value)}
+                          placeholder="Introduce tus cambios o sugerencias..."
+                          className="w-full text-[12px] rounded-lg border border-amber-500/30 bg-amber-500/5 text-amber-900 dark:text-amber-100 placeholder:text-amber-500/50 focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/60 transition-all resize-none p-3 pr-10 min-h-[70px] outline-none"
+                          rows={2}
+                          disabled={rejecting || approving}
+                        />
+                        <button
+                          type="submit"
+                          disabled={!feedback.trim() || rejecting || approving}
+                          className="absolute right-2 bottom-2 w-7 h-7 rounded-md bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white transition-colors flex items-center justify-center shadow-md shadow-amber-500/20"
+                        >
+                          {rejecting ? <RefreshCw size={12} className="animate-spin" /> : <ChevronRight size={14} strokeWidth={2} />}
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Artifacts & Viewer panel */}
@@ -666,23 +703,65 @@ export default function FactoryStatusPage() {
             </div>
 
             {/* ── Code Viewer Panel ── */}
-            {(isDone || activeRepoUrl) && activeRepoUrl && (
-              <div className="flex flex-col rounded-xl border border-[#E8E8E4] dark:border-[#252522] bg-white dark:bg-[#141413] overflow-hidden shrink-0" style={{ height: 600 }}>
-                {activeRepoUrl.includes("github.com") ? (
+            <div className="flex flex-col rounded-xl border border-[#E8E8E4] dark:border-[#252522] bg-white dark:bg-[#141413] overflow-hidden shrink-0 relative" style={{ height: 600 }}>
+              {activeRepoUrl && (
+                <div className="absolute top-2 right-2 flex gap-2 z-10">
+                  <button 
+                    onClick={() => {
+                        const iframe = document.querySelector('iframe[title="CodeSandbox Classic"]') as HTMLIFrameElement;
+                        if (iframe) iframe.src = iframe.src;
+                    }}
+                    className="p-1.5 rounded-md bg-black/40 hover:bg-black/60 text-white/70 hover:text-white transition-all backdrop-blur-sm border border-white/10"
+                    title="Recargar visor"
+                  >
+                    <RefreshCw size={12} />
+                  </button>
+                  <a 
+                    href={activeRepoUrl.replace('github.com', 'stackblitz.com/github')}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-1.5 rounded-md bg-black/40 hover:bg-black/60 text-white/70 hover:text-white transition-all backdrop-blur-sm border border-white/10"
+                    title="Abrir en StackBlitz"
+                  >
+                    <ExternalLink size={12} />
+                  </a>
+                </div>
+              )}
+              {activeRepoUrl ? (
+                activeRepoUrl.includes("github.com") ? (
                   <iframe
-                    src={`https://codesandbox.io/p/github/${activeRepoUrl.split('github.com/')[1].replace(/\.git$/, '').replace(/\/$/, '')}?embed=1&theme=dark`}
-                    className="w-full h-full border-0 bg-[#1a1a2e]"
-                    title="CodeSandbox"
-                    allow="accelerometer; ambient-light-sensor; camera; encrypted-media; geolocation; gyroscope; hid; microphone; midi; payment; usb; vr; xr-spatial-tracking"
+                    src={`https://stackblitz.com/github/${activeRepoUrl.split('github.com/')[1].replace(/\.git$/, '').replace(/\/$/, '')}?embed=1&theme=dark&view=editor`}
+                    className="w-full h-full border-0 bg-[#09090b]"
+                    title="StackBlitz Viewer"
+                    onLoad={() => console.log("StackBlitz loading for:", activeRepoUrl)}
+                    allow="accelerometer; camera; encrypted-media; geolocation; gyroscope; hid; microphone; midi; payment; usb; xr-spatial-tracking"
                     sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts allow-downloads"
                   />
                 ) : (
                   <div className="flex-1 flex items-center justify-center p-4 bg-[#1a1a2e]">
                     <p className="text-[11px] text-[#8B8B85]">Repositorio no soportado para el visor interactivo.</p>
                   </div>
-                )}
-              </div>
-            )}
+                )
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-[#1a1a2e] text-center px-10">
+                  <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-white/20">
+                    <Github size={24} />
+                  </div>
+                  <div>
+                    <h3 className="text-white text-[13px] font-medium">Esperando Repositorio</h3>
+                    <p className="text-white/40 text-[11px] mt-1 max-w-[250px]">
+                      El visor de código se activará automáticamente cuando el Agente de Desarrollo cree el repositorio en GitHub (Fase 3).
+                    </p>
+                  </div>
+                  {isRunning && (
+                    <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 mt-2">
+                      <RefreshCw size={10} className="animate-spin text-emerald-400" />
+                      <span className="text-[10px] text-white/60">Pipeline en curso...</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
